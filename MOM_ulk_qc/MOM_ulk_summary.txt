@@ -1,0 +1,26 @@
+Run time:                         67.49 hrs
+Pores available @ T=0:            2,503
+Total reads:                      1,765,424
+Pass-filter reads:                1,627,510
+% pass-filter:                    92.19 %
+Total yield:                      53.203 Gb
+Pass-filter yield:                49.901 Gb
+N50:                              61,464 bp
+Mean PF read length:              30,661 bp
+SD PF read length:                37,202 bp
+Longest PF read:                  742,585 bp
+Mean PF Q-score:                  19.91
+Proportion PF bases >= 20,000 bp:  0.8647
+
+Top 10 longest PF reads:
+                                 read_id  sequence_length_template
+1   0ab1af96-083d-456a-adab-59c94de5dadf                    742585
+2   4a8aeb29-bae2-4a12-91ee-55990e271294                    517209
+3   aafeb492-5e49-4f1e-b7a9-3d7e621297a3                    507038
+4   08aa2c88-e54e-4e24-aa3f-517d0a2ca638                    483429
+5   c75b6aff-7597-42b4-b68c-c5d13fd7a4ac                    476587
+6   d671b0e1-6fde-47ec-b051-0c04d5fea62c                    470303
+7   817cb082-21c0-492b-a753-6f6a21ec0ccd                    463899
+8   c007e007-c820-4ab4-b540-25f36b5bae31                    462878
+9   98d8cd09-6c37-434b-8240-8774f6d3b736                    457786
+10  fa4dd408-3b37-4e22-8ca9-33769ef44aa5                    456304

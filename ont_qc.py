@@ -5,102 +5,60 @@ ont_qc.py — Oxford Nanopore Sequencing QC Suite
 Generates quality-control plots and a self-contained HTML report from the
 output files of an Oxford Nanopore Technology (ONT) sequencing run.
 
-The script reads one or more of the following MinKNOW output files:
-
+Input files
+-----------
   sequencing_summary*.txt   Per-read statistics (required). Contains read
                             lengths, Q-scores, channel assignments, timing,
                             and — for barcoded runs — barcode calls.
                             Barcoded runs are detected automatically.
+                            Supports files from Albacore, Guppy, and Dorado.
 
   pore_activity*.csv        Per-minute channel state counts (optional).
-                            Used to plot pore duty-time over the run.
+                            Used to plot pore duty-time and occupancy.
 
   throughput_*.csv          Per-minute cumulative counters (optional).
                             Used to plot sequencing rate, read rate, pass
                             rate, and estimated vs basecalled base comparison.
 
-All three files are auto-detected in the current directory if not specified
-explicitly. Output is written to <runName>_qc/ by default.
+All three files are auto-detected in the same directory as the summary file
+if not specified explicitly.
 
-Outputs
+Outputs  (written to <runName>_qc/ by default)
 -------
-  <runName>_summary.txt         Plain-text summary statistics
-  <runName>_*.png               Individual QC plot images
-  <runName>_report.html         Self-contained HTML report with all plots
-                                and statistics embedded (no external deps)
+  <runName>_summary.txt     Plain-text run statistics
+  <runName>_*.png           Individual QC plot images
+  <runName>_report.html     Self-contained HTML report (no external deps)
 
 Usage
 -----
-  # Minimal — auto-detect all input files:
+  # Minimal — auto-detect all input files in the current directory:
   python ont_qc.py --runName MyRun
 
-  # Explicit input files with subsampling (useful for very large runs):
+  # Explicit summary file:
+  python ont_qc.py --file /path/to/sequencing_summary.txt --runName MyRun
+
+  # With optional companion files:
   python ont_qc.py --file sequencing_summary.txt \\
                    --poreActivity pore_activity.csv \\
                    --throughput throughput_data.csv \\
-                   --runName MyRun \\
-                   --subsample 0.5
+                   --runName MyRun
 
-  # Barcoded run (barcode plots generated automatically):
-  python ont_qc.py --file sequencing_summary_barcoded.txt --runName MyRun
+  # Subsample to 50% of reads (useful for very large files):
+  python ont_qc.py --file sequencing_summary.txt --runName MyRun --subsample 0.5
 
   # Custom output directory and read-length axis cap:
   python ont_qc.py --runName MyRun --outdir /results/qc --maxLength 50000
 
-Email Delivery
---------------
-Add --email <address> to zip all outputs and send them as an attachment
-once the report is complete. Three delivery methods are available via
---emailMethod:
+  # Generate an animated channel strand-time video (requires ffmpeg):
+  python ont_qc.py --runName MyRun --video
 
-  smtp (default)
-    Standard SMTP. Supports open relays (no credentials) and authenticated
-    servers. For authenticated servers pass --smtpUser and --smtpPass on
-    the command line, or set the environment variables ONT_QC_SMTP_USER
-    and ONT_QC_SMTP_PASS instead.
+  # Change the proportion-above-cutoff threshold (default 20,000 bp):
+  python ont_qc.py --runName MyRun --prop 50000
 
-    Port guide:
-      25   unauthenticated relay (default)
-      587  STARTTLS (most institutional / Gmail SMTP servers)
-      465  SSL/TLS
-
-    Gmail note: use an App Password, not your account password.
-    Generate one at: myaccount.google.com/apppasswords
-
-    Example (Gmail):
-      python ont_qc.py --runName MyRun --email you@gmail.com \\
-        --smtpHost smtp.gmail.com --smtpPort 587 \\
-        --smtpUser you@gmail.com --smtpPass <app-password>
-
-    Example (institutional relay, no auth):
-      python ont_qc.py --runName MyRun --email you@lab.org \\
-        --smtpHost smtp.lab.org --smtpPort 25
-
-  sendmail
-    Pipes the message to the local sendmail/postfix binary. No credentials
-    are needed — the system MTA handles delivery. Works on most Linux
-    servers and macOS systems with postfix configured.
-
-    Example:
-      python ont_qc.py --runName MyRun --email you@lab.org \\
-        --emailMethod sendmail
-
-  gmail-oauth
-    Sends via the Gmail API using OAuth2. No password is stored.
-    On the first run a browser window opens for a one-time Google sign-in;
-    the access token is cached at ~/.config/ont_qc/gmail_token.json and
-    refreshed automatically on subsequent runs.
-
-    Requirements:
-      pip install google-auth-oauthlib google-api-python-client
-    Download credentials.json from:
-      Google Cloud Console -> APIs & Services -> Credentials
-      -> Create Credentials -> OAuth client ID -> Desktop app
-
-    Example:
-      python ont_qc.py --runName MyRun --email you@gmail.com \\
-        --emailMethod gmail-oauth \\
-        --gmailCredentials ~/Downloads/credentials.json
+Plot reference guide
+--------------------
+  python plot_guide.py          # writes ONT_QC_Plot_Guide.pdf
+  Requires: pip install reportlab
 """
 
 import argparse
@@ -116,7 +74,7 @@ warnings.filterwarnings(
     category=FutureWarning,
 )
 
-from qc_modules import loader, stats, seq_plots, barcode_plots, duty_plots, throughput_plots, report, emailer
+from qc_modules import loader, stats, seq_plots, barcode_plots, duty_plots, throughput_plots, report
 
 
 # ---------------------------------------------------------------------------
@@ -165,53 +123,6 @@ def parse_args():
         '--video', action='store_true', default=False,
         help='Generate an animated MP4 (or GIF) showing per-channel strand time over the run. '
              '1 hour of sequencing = 1 second of video. Requires ffmpeg for MP4 output.',
-    )
-
-    # Email options
-    email_group = p.add_argument_group(
-        'email',
-        'Send the zipped report by email. Three methods are available:\n'
-        '  smtp         Standard SMTP (default). Pass --smtpUser / --smtpPass\n'
-        '               for authenticated servers, or omit for open relays.\n'
-        '  sendmail     Pipe to local sendmail/postfix binary. No credentials\n'
-        '               needed if the system MTA is configured.\n'
-        '  gmail-oauth  Gmail API with OAuth2. No password stored. Opens a\n'
-        '               browser once for sign-in; token cached afterwards.\n'
-        '               Requires --gmailCredentials and:\n'
-        '               pip install google-auth-oauthlib google-api-python-client',
-    )
-    email_group.add_argument(
-        '--email', type=str, default=None, metavar='ADDRESS',
-        help='Recipient email address. Triggers sending a zipped report.',
-    )
-    email_group.add_argument(
-        '--emailMethod', type=str, default='smtp',
-        choices=['smtp', 'sendmail', 'gmail-oauth'],
-        help='Delivery method: smtp | sendmail | gmail-oauth (default: smtp).',
-    )
-    email_group.add_argument(
-        '--smtpHost', type=str, default='localhost',
-        help='[smtp] SMTP server hostname (default: localhost).',
-    )
-    email_group.add_argument(
-        '--smtpPort', type=int, default=25,
-        help='[smtp] Port: 25 = unauthenticated, 587 = STARTTLS, 465 = SSL (default: 25).',
-    )
-    email_group.add_argument(
-        '--smtpFrom', type=str, default='ont_qc@localhost',
-        help='Sender address in the From: header (default: ont_qc@localhost).',
-    )
-    email_group.add_argument(
-        '--smtpUser', type=str, default=None, metavar='USER',
-        help='[smtp] SMTP username (overrides ONT_QC_SMTP_USER env var).',
-    )
-    email_group.add_argument(
-        '--smtpPass', type=str, default=None, metavar='PASS',
-        help='[smtp] SMTP password (overrides ONT_QC_SMTP_PASS env var).',
-    )
-    email_group.add_argument(
-        '--gmailCredentials', type=str, default=None, metavar='FILE',
-        help='[gmail-oauth] Path to credentials.json from Google Cloud Console.',
     )
 
     return p.parse_args()
@@ -473,23 +384,6 @@ def main():
     report.build_report(run_stats, plot_registry, report_path, run_name,
                         video_path=vid_path, plotly_sections=plotly_sections)
     print(f'[ont_qc] HTML report written: {report_path}')
-
-    # --- Email --------------------------------------------------------------
-    if args.email:
-        print(f'[ont_qc] Zipping outputs for email...')
-        zip_path = emailer.zip_outputs(outdir, run_name)
-        emailer.send_email(
-            recipient         = args.email,
-            zip_path          = zip_path,
-            run_name          = run_name,
-            method            = args.emailMethod,
-            smtp_host         = args.smtpHost,
-            smtp_port         = args.smtpPort,
-            smtp_from         = args.smtpFrom,
-            smtp_user         = args.smtpUser,
-            smtp_pass         = args.smtpPass,
-            gmail_credentials = args.gmailCredentials,
-        )
 
     print('[ont_qc] Done.')
 
