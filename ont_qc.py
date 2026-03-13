@@ -52,8 +52,17 @@ Usage
   # Generate an animated channel strand-time video (requires ffmpeg):
   python ont_qc.py --runName MyRun --video
 
-  # Change the proportion-above-cutoff threshold (default 20,000 bp):
+  # Change the proportion-above-cutoff threshold (default 2,000 bp):
   python ont_qc.py --runName MyRun --prop 50000
+
+  # Set a read length display range for length-axis plots:
+  python ont_qc.py --runName MyRun --minLength 1000 --maxLength 50000
+
+  # Restrict barcode plots to the top 12 barcodes by read count:
+  python ont_qc.py --runName MyRun --barcodes 12
+
+  # Restrict barcode plots to specific barcodes:
+  python ont_qc.py --runName MyRun --barcodes barcode01 barcode02 barcode36
 
 Plot reference guide
 --------------------
@@ -116,8 +125,21 @@ def parse_args():
         help='X-axis cap for read length plots (default: mean + 3×SD).',
     )
     p.add_argument(
-        '--prop', type=int, default=20_000,
-        help='Read length cutoff for proportion-above-cutoff metric (default: 20000).',
+        '--prop', type=int, default=2_000,
+        help='Read length cutoff for proportion-above-cutoff metric (default: 2000).',
+    )
+    p.add_argument(
+        '--minLength', type=int, default=None,
+        help='Minimum read length (bp) shown on all read-length axis plots.',
+    )
+    p.add_argument(
+        '--barcodes', nargs='+', default=None,
+        help=(
+            'Restrict barcode plots to a subset of barcodes. '
+            'Pass a single integer for the top N barcodes by read count '
+            '(e.g. --barcodes 12), or a space-separated list of barcode names '
+            '(e.g. --barcodes barcode01 barcode02 barcode36).'
+        ),
     )
     p.add_argument(
         '--video', action='store_true', default=False,
@@ -150,6 +172,35 @@ def p(outdir, run_name, suffix):
 
 
 # ---------------------------------------------------------------------------
+# Barcode resolution helper
+# ---------------------------------------------------------------------------
+
+def resolve_barcodes(df, barcodes_arg):
+    """
+    Return a list of barcode names to include in barcode plots, or None (all).
+
+    barcodes_arg : list from argparse (nargs='+')
+      - Single integer string  → top N barcodes by pass-filter read count
+      - One or more barcode names → use exactly those barcodes
+    """
+    if barcodes_arg is None:
+        return None
+    if len(barcodes_arg) == 1:
+        try:
+            n = int(barcodes_arg[0])
+            pf = df[df['passes_filtering'] == True].copy()
+            pf = pf[~pf['barcode_arrangement'].str.lower().str.contains('unclassified', na=True)]
+            pf = pf.dropna(subset=['barcode_arrangement'])
+            top_n = pf['barcode_arrangement'].value_counts().head(n).index.tolist()
+            print(f'[ont_qc] Barcode filter: top {n} → {top_n}')
+            return top_n
+        except ValueError:
+            pass
+    print(f'[ont_qc] Barcode filter: {barcodes_arg}')
+    return list(barcodes_arg)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -175,8 +226,10 @@ def main():
 
     if is_barcoded:
         print('[ont_qc] Barcoded run detected.')
+        selected_barcodes = resolve_barcodes(df, args.barcodes)
     else:
         print('[ont_qc] Non-barcoded run.')
+        selected_barcodes = None
 
     print(f'[ont_qc] Loaded {len(df):,} reads.')
 
@@ -193,6 +246,7 @@ def main():
 
     n50 = run_stats['n50']
     max_length = args.maxLength  # may be None → functions will auto-compute
+    min_length = args.minLength  # may be None → functions default to 0
 
     # --- Core plots ---------------------------------------------------------
     plot_registry = {
@@ -223,18 +277,19 @@ def main():
 
     path = seq_plots.plot_read_length_dist(
         df, n50, p(outdir, run_name, 'read_length_dist.png'),
-        max_length=max_length,
+        max_length=max_length, min_length=min_length,
     )
     plot_registry['read_quality'].append((path, 'Read Length Distribution'))
 
     path = seq_plots.plot_read_length_cdf(
         df, n50, p(outdir, run_name, 'read_length_cdf.png'),
-        max_length=max_length,
+        max_length=max_length, min_length=min_length,
     )
     plot_registry['read_quality'].append((path, 'Read Length CDF'))
 
     path = seq_plots.plot_length_proportions(
-        df, n50, p(outdir, run_name, 'length_proportions.png')
+        df, n50, p(outdir, run_name, 'length_proportions.png'),
+        min_length=min_length, max_length=max_length,
     )
     plot_registry['read_quality'].append((path, 'Proportion of Bases by Read Length'))
 
@@ -245,13 +300,14 @@ def main():
     plot_registry['read_quality'].append((path, 'Q-Score Tiers over Time'))
 
     path = seq_plots.plot_length_vs_qscore(
-        df, p(outdir, run_name, 'length_vs_qscore.png')
+        df, p(outdir, run_name, 'length_vs_qscore.png'),
+        min_length=min_length, max_length=max_length,
     )
     plot_registry['read_quality'].append((path, 'Read Length vs. Q-Score'))
 
     path = seq_plots.plot_length_by_qscore_tier(
         df, p(outdir, run_name, 'length_by_qscore_tier.png'),
-        max_length=max_length,
+        max_length=max_length, min_length=min_length,
     )
     if path:
         plot_registry['read_quality'].append((path, 'Read Length by Q-Score Tier'))
@@ -262,7 +318,7 @@ def main():
 
     path = seq_plots.plot_read_length_vs_time(
         df, p(outdir, run_name, 'read_length_vs_time.png'),
-        max_length=max_length,
+        max_length=max_length, min_length=min_length,
     )
     plot_registry['read_quality'].append((path, 'Read Length vs. Run Time'))
 
@@ -294,32 +350,38 @@ def main():
         print('[ont_qc] Generating barcode plots...')
 
         path = barcode_plots.plot_barcode_read_counts(
-            df, p(outdir, run_name, 'barcode_read_counts.png')
+            df, p(outdir, run_name, 'barcode_read_counts.png'),
+            barcodes=selected_barcodes,
         )
         plot_registry['barcodes'].append((path, 'Read Counts per Barcode'))
 
         path = barcode_plots.plot_barcode_yield(
-            df, p(outdir, run_name, 'barcode_yield.png')
+            df, p(outdir, run_name, 'barcode_yield.png'),
+            barcodes=selected_barcodes,
         )
         plot_registry['barcodes'].append((path, 'Yield per Barcode'))
 
         path = barcode_plots.plot_barcode_qscore(
-            df, p(outdir, run_name, 'barcode_qscore.png')
+            df, p(outdir, run_name, 'barcode_qscore.png'),
+            barcodes=selected_barcodes,
         )
         plot_registry['barcodes'].append((path, 'Q-Score Distribution per Barcode'))
 
         path = barcode_plots.plot_barcode_read_length(
-            df, p(outdir, run_name, 'barcode_read_length.png')
+            df, p(outdir, run_name, 'barcode_read_length.png'),
+            min_length=min_length, barcodes=selected_barcodes,
         )
         plot_registry['barcodes'].append((path, 'Read Length Distribution per Barcode'))
 
         path = barcode_plots.plot_barcode_read_length_cdf(
-            df, p(outdir, run_name, 'barcode_read_length_cdf.png')
+            df, p(outdir, run_name, 'barcode_read_length_cdf.png'),
+            min_length=min_length, barcodes=selected_barcodes,
         )
         plot_registry['barcodes'].append((path, 'Read Length CDF per Barcode'))
 
         path = barcode_plots.plot_barcode_accumulation(
-            df, p(outdir, run_name, 'barcode_accumulation.png')
+            df, p(outdir, run_name, 'barcode_accumulation.png'),
+            barcodes=selected_barcodes,
         )
         plot_registry['barcodes'].append((path, 'Cumulative Read Accumulation per Barcode'))
 

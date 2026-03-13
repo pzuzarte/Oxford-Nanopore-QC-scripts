@@ -23,12 +23,14 @@ def _save(fig, path):
     return path
 
 
-def _pf_barcodes(df, exclude_unclassified=True):
+def _pf_barcodes(df, exclude_unclassified=True, barcodes=None):
     """Return pass-filter rows with a clean barcode column."""
     pf = df[df['passes_filtering'] == True].copy()
     if exclude_unclassified:
         pf = pf[~pf['barcode_arrangement'].str.lower().str.contains('unclassified', na=True)]
     pf = pf.dropna(subset=['barcode_arrangement'])
+    if barcodes is not None:
+        pf = pf[pf['barcode_arrangement'].isin(barcodes)]
     return pf
 
 
@@ -36,9 +38,9 @@ def _pf_barcodes(df, exclude_unclassified=True):
 # Read counts per barcode
 # ---------------------------------------------------------------------------
 
-def plot_barcode_read_counts(df, outpath, exclude_unclassified=True):
+def plot_barcode_read_counts(df, outpath, exclude_unclassified=True, barcodes=None):
     """Horizontal bar chart: read counts per barcode (pass-filter)."""
-    pf = _pf_barcodes(df, exclude_unclassified)
+    pf = _pf_barcodes(df, exclude_unclassified, barcodes=barcodes)
     counts = (
         pf['barcode_arrangement']
         .value_counts()
@@ -59,9 +61,9 @@ def plot_barcode_read_counts(df, outpath, exclude_unclassified=True):
 # Yield per barcode
 # ---------------------------------------------------------------------------
 
-def plot_barcode_yield(df, outpath, exclude_unclassified=True):
+def plot_barcode_yield(df, outpath, exclude_unclassified=True, barcodes=None):
     """Horizontal bar chart: sequencing yield (Mb) per barcode (pass-filter)."""
-    pf = _pf_barcodes(df, exclude_unclassified)
+    pf = _pf_barcodes(df, exclude_unclassified, barcodes=barcodes)
     yield_df = (
         pf.groupby('barcode_arrangement')['sequence_length_template']
         .sum()
@@ -83,9 +85,9 @@ def plot_barcode_yield(df, outpath, exclude_unclassified=True):
 # Q-score distribution per barcode
 # ---------------------------------------------------------------------------
 
-def plot_barcode_qscore(df, outpath, exclude_unclassified=True):
+def plot_barcode_qscore(df, outpath, exclude_unclassified=True, barcodes=None):
     """Violin plot: Q-score distribution per barcode (pass-filter)."""
-    pf = _pf_barcodes(df, exclude_unclassified)
+    pf = _pf_barcodes(df, exclude_unclassified, barcodes=barcodes)
 
     # Order barcodes alphabetically
     order = sorted(pf['barcode_arrangement'].unique())
@@ -114,15 +116,17 @@ def plot_barcode_qscore(df, outpath, exclude_unclassified=True):
 # Read length distribution per barcode
 # ---------------------------------------------------------------------------
 
-def plot_barcode_read_length(df, outpath, exclude_unclassified=True):
+def plot_barcode_read_length(df, outpath, exclude_unclassified=True, min_length=None, max_length=None, barcodes=None):
     """Violin plot: read length distribution per barcode (pass-filter)."""
-    pf = _pf_barcodes(df, exclude_unclassified)
+    pf = _pf_barcodes(df, exclude_unclassified, barcodes=barcodes)
 
-    # Cap at mean + 3 SD to avoid extreme outliers distorting the plot
+    # Cap at mean + 3 SD to avoid extreme outliers, unless max_length is provided
     mean_len = pf['sequence_length_template'].mean()
     sd_len   = pf['sequence_length_template'].std()
-    cap      = mean_len + 3 * sd_len
+    cap      = max_length if max_length is not None else mean_len + 3 * sd_len
     pf = pf[pf['sequence_length_template'] <= cap].copy()
+    if min_length is not None:
+        pf = pf[pf['sequence_length_template'] >= min_length]
 
     order = sorted(pf['barcode_arrangement'].unique())
 
@@ -150,19 +154,23 @@ def plot_barcode_read_length(df, outpath, exclude_unclassified=True):
 # Read length CDF per barcode
 # ---------------------------------------------------------------------------
 
-def plot_barcode_read_length_cdf(df, outpath, exclude_unclassified=True):
+def plot_barcode_read_length_cdf(df, outpath, exclude_unclassified=True, min_length=None, max_length=None, barcodes=None):
     """Base-weighted read length CDF — one line per barcode (pass-filter)."""
-    pf = _pf_barcodes(df, exclude_unclassified)
+    pf = _pf_barcodes(df, exclude_unclassified, barcodes=barcodes)
     mean_len = pf['sequence_length_template'].mean()
     sd_len   = pf['sequence_length_template'].std()
-    max_len  = int(mean_len + 3 * sd_len)
-    pf = pf[pf['sequence_length_template'] <= max_len]
+    max_len  = max_length if max_length is not None else int(mean_len + 3 * sd_len)
+    min_len  = min_length if min_length is not None else 0
+    pf = pf[
+        (pf['sequence_length_template'] <= max_len) &
+        (pf['sequence_length_template'] >= min_len)
+    ]
 
-    barcodes = sorted(pf['barcode_arrangement'].unique())
-    pal = sns.color_palette('tab20', len(barcodes))
+    bc_names = sorted(pf['barcode_arrangement'].unique())
+    pal = sns.color_palette('tab20', len(bc_names))
 
     fig, ax = plt.subplots(figsize=(12, 7))
-    for bc, color in zip(barcodes, pal):
+    for bc, color in zip(bc_names, pal):
         sub = (
             pf[pf['barcode_arrangement'] == bc]
             .sort_values('sequence_length_template')
@@ -175,7 +183,7 @@ def plot_barcode_read_length_cdf(df, outpath, exclude_unclassified=True):
                 label=bc, color=color, linewidth=1.5, alpha=0.85)
 
     ax.axhline(0.5, color='grey', linestyle='--', linewidth=1, alpha=0.6)
-    ax.set_xlim(0, max_len)
+    ax.set_xlim(min_len, max_len)
     ax.set_ylim(0, 1.02)
     ax.set_title('Read Length CDF per Barcode (Pass-Filter)', fontsize=16)
     ax.set_xlabel('Read Length (bp)', fontsize=13)
@@ -188,12 +196,12 @@ def plot_barcode_read_length_cdf(df, outpath, exclude_unclassified=True):
 # Barcode accumulation over time
 # ---------------------------------------------------------------------------
 
-def plot_barcode_accumulation(df, outpath, exclude_unclassified=True):
+def plot_barcode_accumulation(df, outpath, exclude_unclassified=True, barcodes=None):
     """
     Stacked area chart of cumulative read counts per barcode over run time.
     Shows when each sample was sequenced and whether yields were consistent.
     """
-    pf = _pf_barcodes(df, exclude_unclassified).dropna(subset=['start_time']).copy()
+    pf = _pf_barcodes(df, exclude_unclassified, barcodes=barcodes).dropna(subset=['start_time']).copy()
     pf['hour'] = (pf['start_time'] / 3600).astype(int)
 
     pivot = (
