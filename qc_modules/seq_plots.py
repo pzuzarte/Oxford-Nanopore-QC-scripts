@@ -667,10 +667,13 @@ def plot_length_by_qscore_tier(df, outpath, max_length=None, min_length=None):
     sns.violinplot(
         data=pf,
         x='q_tier', y='sequence_length_template',
+        hue='q_tier',
         order=labels,
+        hue_order=labels,
         palette='RdYlGn',
         inner='box',
         cut=0,
+        legend=False,
         ax=ax,
     )
     ax.set_title('Read Length Distribution by Q-Score Tier (Pass-Filter)', fontsize=16)
