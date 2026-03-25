@@ -1,0 +1,9 @@
+.DS_Store
+barcoded_run/.DS_Store
+barcoded_run/sequencing_summary_test_barcoded.txt
+MOM_ulk/pore_activity_PBG35699_c38576fa_9da6528c.csv
+MOM_ulk/sequencing_summary_PBG35699_c38576fa_9da6528c.txt
+MOM_ulk/throughput_PBG35699_c38576fa_9da6528c.csv
+singleplex_run/pore_activity_PBG32116_2bd7c1a0_5cc884bc.csv
+singleplex_run/sequencing_summary_PBG32116_2bd7c1a0_5cc884bc.txt
+singleplex_run/throughput_PBG32116_2bd7c1a0_5cc884bc.csv
