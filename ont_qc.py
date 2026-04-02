@@ -71,9 +71,18 @@ Plot reference guide
 """
 
 import argparse
+import io
 import os
 import sys
 import warnings
+
+# Cluster/HPC environments often use latin-1 locale, which can't encode
+# Unicode characters (e.g. em dashes in help strings) when argparse prints
+# --help.  Force stdout/stderr to UTF-8 with replacement fallback.
+if hasattr(sys.stdout, "buffer"):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "buffer"):
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 # Seaborn ≤ 0.13 triggers a pandas FutureWarning about use_inf_as_na.
 # This is an internal seaborn issue; suppress it to keep output clean.

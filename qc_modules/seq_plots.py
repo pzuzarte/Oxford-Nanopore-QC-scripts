@@ -536,7 +536,7 @@ def plot_cumulative_n50_over_time(df, outpath):
     """
     pf = (
         df[df['passes_filtering'] == True]
-        .dropna(subset=['start_time'])
+        .dropna(subset=['start_time', 'sequence_length_template'])
         .sort_values('start_time')[['start_time', 'sequence_length_template']]
         .copy()
         .reset_index(drop=True)
