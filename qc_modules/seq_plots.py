@@ -77,7 +77,7 @@ def plot_reads_per_hour(df, outpath):
 # Read length distribution
 # ---------------------------------------------------------------------------
 
-def plot_read_length_dist(df, n50, outpath, max_length=None, min_length=None):
+def plot_read_length_dist(df, n50, outpath, max_length=None, min_length=None, log_length=False):
     """Histogram of read lengths with N50 marked."""
     pf = df[df['passes_filtering'] == True]
     mean_len = pf['sequence_length_template'].mean()
@@ -86,22 +86,25 @@ def plot_read_length_dist(df, n50, outpath, max_length=None, min_length=None):
         max_length = int(mean_len + 3 * sd_len)
     if min_length is None:
         min_length = 0
+    # Log scale requires x > 0
+    plot_min = max(min_length, 1) if log_length else min_length
 
     plot_df = df[
         (df['sequence_length_template'] <= max_length) &
-        (df['sequence_length_template'] >= min_length)
+        (df['sequence_length_template'] >= plot_min)
     ]
 
     fig, ax = plt.subplots(figsize=_FIGSIZE)
     sns.histplot(
         plot_df['sequence_length_template'],
         bins=100,
+        log_scale=log_length,
         ax=ax,
     )
     ax.axvline(n50, color=N50_COLOR, linestyle='--', alpha=0.8, linewidth=1.5)
     ax.text(n50, ax.get_ylim()[1] * 0.95, f' N50 = {n50:,} bp',
             ha='left', va='top', color=N50_COLOR, fontsize=11)
-    ax.set_xlim(min_length, max_length)
+    ax.set_xlim(plot_min, max_length)
     ax.set_title('Read Length Distribution', fontsize=16)
     ax.set_xlabel('Read Length (bp)', fontsize=13)
     ax.set_ylabel('Read Count', fontsize=13)
@@ -113,17 +116,28 @@ def plot_read_length_dist(df, n50, outpath, max_length=None, min_length=None):
 # ---------------------------------------------------------------------------
 
 def plot_length_proportions(df, n50, outpath, max_points=100_000, min_length=None, max_length=None):
-    """Proportion of PF bases sequenced by read length."""
+    """Proportion of PF bases sequenced by read length.
+
+    total_yield is intentionally computed from ALL pass-filter reads before any
+    length cap is applied.  Clipping to max_length only sets the x-axis display
+    limit — it does not alter the normalisation — so the N50 marker will always
+    sit exactly at y = 0.5 regardless of the chosen max_length.
+    """
     pf = df[df['passes_filtering'] == True].sort_values(
         'sequence_length_template', ascending=False
     ).copy()
     if min_length is not None:
         pf = pf[pf['sequence_length_template'] >= min_length]
-    if max_length is not None:
-        pf = pf[pf['sequence_length_template'] <= max_length]
+
+    # Normalise against the full (unclipped) yield so the 0.5 crossover always
+    # aligns with the N50, even when max_length excludes very long reads.
     total_yield = pf['sequence_length_template'].sum()
     pf['cumulative_yield'] = pf['sequence_length_template'].cumsum()
     pf['proportion'] = pf['cumulative_yield'] / total_yield
+
+    # Apply max_length only for display — after proportions are calculated
+    if max_length is not None:
+        pf = pf[pf['sequence_length_template'] <= max_length]
 
     sample = pf if len(pf) <= max_points else pf.sample(max_points, random_state=42)
 
@@ -167,10 +181,71 @@ def plot_qscore_dist(df, outpath):
 
 
 # ---------------------------------------------------------------------------
+# Read length distribution — pass vs fail
+# ---------------------------------------------------------------------------
+
+def plot_read_length_dist_pass_fail(df, n50, outpath, max_length=None, min_length=None, log_length=False):
+    """
+    KDE of read lengths split by pass/fail, with optional log x-axis.
+
+    Log scale is recommended when pass and fail read lengths span multiple orders
+    of magnitude (e.g. short failed fragments vs long pass reads), as a linear
+    axis collapses both populations into an unreadable spike at the left edge.
+    """
+    pf = df[df['passes_filtering'] == True]
+    mean_len = pf['sequence_length_template'].mean()
+    sd_len   = pf['sequence_length_template'].std()
+
+    if max_length is None:
+        max_length = int(mean_len + 3 * sd_len)
+    # Log scale requires strictly positive values; floor at 1 bp
+    plot_min = max(min_length, 1) if (log_length and min_length is not None) else (
+        1 if log_length else (min_length if min_length is not None else 0)
+    )
+
+    pass_lens = pf.loc[
+        pf['sequence_length_template'].between(plot_min, max_length),
+        'sequence_length_template',
+    ]
+    fail_lens = df.loc[
+        (df['passes_filtering'] == False) &
+        df['sequence_length_template'].between(plot_min, max_length),
+        'sequence_length_template',
+    ]
+
+    fig, ax = plt.subplots(figsize=_FIGSIZE)
+
+    if not pass_lens.empty:
+        sns.kdeplot(
+            pass_lens, color=PASS_COLOR, fill=True, alpha=0.4,
+            label='Pass', log_scale=log_length, ax=ax,
+        )
+    if not fail_lens.empty:
+        sns.kdeplot(
+            fail_lens, color=FAIL_COLOR, fill=True, alpha=0.4,
+            label='Fail', log_scale=log_length, ax=ax,
+        )
+
+    ax.axvline(n50, color=N50_COLOR, linestyle='--', alpha=0.8, linewidth=1.5)
+    ax.text(
+        n50, ax.get_ylim()[1] * 0.95,
+        f' N50 = {n50:,} bp',
+        ha='left', va='top', color=N50_COLOR, fontsize=11,
+    )
+
+    ax.set_xlim(plot_min, max_length)
+    ax.set_title('Read Length Distribution (Pass vs. Fail)', fontsize=16)
+    ax.set_xlabel('Read Length (bp)', fontsize=13)
+    ax.set_ylabel('Density', fontsize=13)
+    ax.legend(fontsize=12)
+    return _save(fig, outpath)
+
+
+# ---------------------------------------------------------------------------
 # Read length vs Q-score joint plot
 # ---------------------------------------------------------------------------
 
-def plot_length_vs_qscore(df, outpath, max_points=20_000, min_length=None, max_length=None):
+def plot_length_vs_qscore(df, outpath, max_points=20_000, min_length=None, max_length=None, log_length=False):
     """Hex joint plot: read length vs Q-score (pass-filter reads)."""
     pf = df[df['passes_filtering'] == True]
     mean_len = pf['sequence_length_template'].mean()
@@ -179,19 +254,24 @@ def plot_length_vs_qscore(df, outpath, max_points=20_000, min_length=None, max_l
         max_length = int(mean_len + 3 * sd_len)
     if min_length is None:
         min_length = 0
+    plot_min = max(min_length, 1) if log_length else min_length
 
     sample = pf if len(pf) <= max_points else pf.sample(max_points, random_state=42)
-    sample = sample[sample['sequence_length_template'] >= min_length]
+    sample = sample[sample['sequence_length_template'] >= plot_min]
 
+    joint_kws = {'xscale': 'log'} if log_length else {}
     grid = sns.jointplot(
         x='sequence_length_template',
         y='mean_qscore_template',
         data=sample,
         kind='hex',
         height=8,
-        xlim=(min_length, max_length),
+        xlim=(plot_min, max_length),
         ylim=(0, 40),
+        joint_kws=joint_kws,
     )
+    if log_length:
+        grid.ax_marg_x.set_xscale('log')
     grid.set_axis_labels('Read Length (bp)', 'Mean Q-Score', fontsize=13)
     grid.figure.suptitle('Read Length vs. Q-Score (PF reads)', y=1.01, fontsize=16)
     grid.figure.savefig(outpath, bbox_inches='tight', dpi=150)
@@ -417,27 +497,24 @@ def plot_active_pores_over_time(df, outpath):
 # ---------------------------------------------------------------------------
 
 def plot_read_length_cdf(df, n50, outpath, max_length=None, min_length=None):
-    """Base-weighted CDF of read lengths with N50 crosshair marked."""
+    """Base-weighted CDF of read lengths with N50 crosshair marked.
+
+    max_length is used only as a display limit (x-axis cap).  When None the
+    full read-length range is shown.  The CDF is always normalised to all
+    pass-filter bases so CDF(N50) == 0.5 regardless of the display window.
+    """
     pf = df[df['passes_filtering'] == True].sort_values('sequence_length_template').copy()
-    mean_len = pf['sequence_length_template'].mean()
-    sd_len   = pf['sequence_length_template'].std()
-    if max_length is None:
-        max_length = int(mean_len + 3 * sd_len)
     if min_length is None:
         min_length = 0
 
     # Normalise to ALL pass-filter bases so that CDF(N50) == 0.5 by definition.
-    # Filtering by length before computing total_bases would inflate CDF values
-    # and shift the N50 crosshair off the curve.
     total_bases = pf['sequence_length_template'].sum()
     pf['cdf'] = pf['sequence_length_template'].cumsum() / total_bases
 
-    # Restrict display to [min_length, max_length]; the curve may not start at 0
-    # or reach 1.0 if reads exist outside the range — this is intentional.
-    pf_display = pf[
-        (pf['sequence_length_template'] <= max_length) &
-        (pf['sequence_length_template'] >= min_length)
-    ]
+    # Restrict display to [min_length, max_length] only if a cap is provided.
+    pf_display = pf[pf['sequence_length_template'] >= min_length]
+    if max_length is not None:
+        pf_display = pf_display[pf_display['sequence_length_template'] <= max_length]
 
     fig, ax = plt.subplots(figsize=_FIGSIZE)
     ax.plot(pf_display['sequence_length_template'], pf_display['cdf'],
@@ -446,7 +523,7 @@ def plot_read_length_cdf(df, n50, outpath, max_length=None, min_length=None):
     ax.axhline(0.5, color=N50_COLOR, linestyle='--', linewidth=1.5, alpha=0.8)
     ax.text(n50, 0.53, f' N50 = {n50:,} bp',
             color=N50_COLOR, fontsize=11, va='bottom')
-    ax.set_xlim(min_length, max_length)
+    ax.set_xlim(min_length, max_length)  # None → matplotlib uses data range
     ax.set_ylim(0, 1.02)
     ax.set_title('Read Length CDF — Fraction of Total Bases (Pass-Filter)', fontsize=16)
     ax.set_xlabel('Read Length (bp)', fontsize=13)
@@ -495,7 +572,7 @@ def plot_qscore_bins_over_time(df, outpath):
 # Read length vs run time (hexbin)
 # ---------------------------------------------------------------------------
 
-def plot_read_length_vs_time(df, outpath, max_length=None, min_length=None):
+def plot_read_length_vs_time(df, outpath, max_length=None, min_length=None, log_length=False):
     """Hexbin density plot of read length vs run time (pass-filter reads)."""
     pf = df[df['passes_filtering'] == True].copy()
     mean_len = pf['sequence_length_template'].mean()
@@ -504,9 +581,10 @@ def plot_read_length_vs_time(df, outpath, max_length=None, min_length=None):
         max_length = int(mean_len + 3 * sd_len)
     if min_length is None:
         min_length = 0
+    plot_min = max(min_length, 1) if log_length else min_length
     pf = pf[
         (pf['sequence_length_template'] <= max_length) &
-        (pf['sequence_length_template'] >= min_length)
+        (pf['sequence_length_template'] >= plot_min)
     ]
 
     fig, ax = plt.subplots(figsize=(12, 7))
@@ -516,6 +594,7 @@ def plot_read_length_vs_time(df, outpath, max_length=None, min_length=None):
         gridsize=60,
         cmap='Blues',
         mincnt=1,
+        yscale='log' if log_length else 'linear',
     )
     plt.colorbar(hb, ax=ax, label='Read Count')
     ax.set_title('Read Length vs. Run Time (Pass-Filter)', fontsize=16)
@@ -640,7 +719,7 @@ def plot_pore_survival(df, outpath):
 # Read length distribution by Q-score tier (violin)
 # ---------------------------------------------------------------------------
 
-def plot_length_by_qscore_tier(df, outpath, max_length=None, min_length=None):
+def plot_length_by_qscore_tier(df, outpath, max_length=None, min_length=None, log_length=False):
     """
     Violin plot of pass-filter read length split into Q-score tiers.
     Reveals whether long reads have systematically lower quality.
@@ -654,8 +733,11 @@ def plot_length_by_qscore_tier(df, outpath, max_length=None, min_length=None):
     if max_length is None:
         max_length = int(mean_len + 3 * sd_len)
     pf = pf[pf['sequence_length_template'] <= max_length]
-    if min_length is not None:
-        pf = pf[pf['sequence_length_template'] >= min_length]
+    plot_min = max(min_length, 1) if (log_length and min_length is not None) else min_length
+    if plot_min is not None:
+        pf = pf[pf['sequence_length_template'] >= plot_min]
+    elif log_length:
+        pf = pf[pf['sequence_length_template'] >= 1]
 
     bins   = [0, 10, 15, 20, float('inf')]
     labels = ['Q7–10', 'Q10–15', 'Q15–20', 'Q≥20']
@@ -676,6 +758,8 @@ def plot_length_by_qscore_tier(df, outpath, max_length=None, min_length=None):
         legend=False,
         ax=ax,
     )
+    if log_length:
+        ax.set_yscale('log')
     ax.set_title('Read Length Distribution by Q-Score Tier (Pass-Filter)', fontsize=16)
     ax.set_xlabel('Q-Score Tier', fontsize=13)
     ax.set_ylabel('Read Length (bp)', fontsize=13)

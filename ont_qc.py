@@ -155,6 +155,11 @@ def parse_args():
         help='Generate an animated MP4 (or GIF) showing per-channel strand time over the run. '
              '1 hour of sequencing = 1 second of video. Requires ffmpeg for MP4 output.',
     )
+    p.add_argument(
+        '--logLength', action='store_true', default=False,
+        help='Use a log-scale read-length axis on all read-length plots. '
+             'Useful when pass and fail read lengths span multiple orders of magnitude.',
+    )
 
     return p.parse_args()
 
@@ -256,6 +261,7 @@ def main():
     n50 = run_stats['n50']
     max_length = args.maxLength  # may be None → functions will auto-compute
     min_length = args.minLength  # may be None → functions default to 0
+    log_length = args.logLength
 
     # --- Core plots ---------------------------------------------------------
     plot_registry = {
@@ -286,37 +292,43 @@ def main():
 
     path = seq_plots.plot_read_length_dist(
         df, n50, p(outdir, run_name, 'read_length_dist.png'),
-        max_length=max_length, min_length=min_length,
+        max_length=max_length, min_length=min_length, log_length=log_length,
     )
     plot_registry['read_quality'].append((path, 'Read Length Distribution'))
 
     path = seq_plots.plot_read_length_cdf(
         df, n50, p(outdir, run_name, 'read_length_cdf.png'),
-        max_length=max_length, min_length=min_length,
+        min_length=min_length,
     )
     plot_registry['read_quality'].append((path, 'Read Length CDF'))
 
     path = seq_plots.plot_length_proportions(
         df, n50, p(outdir, run_name, 'length_proportions.png'),
-        min_length=min_length, max_length=max_length,
+        min_length=min_length,
     )
     plot_registry['read_quality'].append((path, 'Proportion of Bases by Read Length'))
 
     path = seq_plots.plot_qscore_dist(df, p(outdir, run_name, 'qscore_dist.png'))
     plot_registry['read_quality'].append((path, 'Q-Score Distribution (Pass vs. Fail)'))
 
+    path = seq_plots.plot_read_length_dist_pass_fail(
+        df, n50, p(outdir, run_name, 'read_length_dist_pass_fail.png'),
+        max_length=max_length, min_length=min_length, log_length=log_length,
+    )
+    plot_registry['read_quality'].append((path, 'Read Length Distribution (Pass vs. Fail)'))
+
     path = seq_plots.plot_qscore_bins_over_time(df, p(outdir, run_name, 'qscore_bins_over_time.png'))
     plot_registry['read_quality'].append((path, 'Q-Score Tiers over Time'))
 
     path = seq_plots.plot_length_vs_qscore(
         df, p(outdir, run_name, 'length_vs_qscore.png'),
-        min_length=min_length, max_length=max_length,
+        min_length=min_length, max_length=max_length, log_length=log_length,
     )
     plot_registry['read_quality'].append((path, 'Read Length vs. Q-Score'))
 
     path = seq_plots.plot_length_by_qscore_tier(
         df, p(outdir, run_name, 'length_by_qscore_tier.png'),
-        max_length=max_length, min_length=min_length,
+        max_length=max_length, min_length=min_length, log_length=log_length,
     )
     if path:
         plot_registry['read_quality'].append((path, 'Read Length by Q-Score Tier'))
@@ -327,7 +339,7 @@ def main():
 
     path = seq_plots.plot_read_length_vs_time(
         df, p(outdir, run_name, 'read_length_vs_time.png'),
-        max_length=max_length, min_length=min_length,
+        max_length=max_length, min_length=min_length, log_length=log_length,
     )
     plot_registry['read_quality'].append((path, 'Read Length vs. Run Time'))
 
