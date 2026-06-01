@@ -182,15 +182,19 @@ def load_summary(filepath, subsample=1.0):
     ]
 
     # --- Load -----------------------------------------------------------------
+    # on_bad_lines='skip' protects against a partially-written last line when
+    # reading a live tmp file during an active MinKNOW run.
     if subsample < 1.0:
         df = pd.read_csv(
             filepath,
             sep='\t',
             usecols=usecols,
             skiprows=lambda i: i > 0 and random.random() > subsample,
+            on_bad_lines='skip',
+            low_memory=False,
         )
     else:
-        df = pd.read_csv(filepath, sep='\t', usecols=usecols)
+        df = pd.read_csv(filepath, sep='\t', usecols=usecols, on_bad_lines='skip', low_memory=False)
 
     # Apply column renames so all downstream code uses canonical names
     if col_rename:

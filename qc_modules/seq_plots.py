@@ -5,6 +5,7 @@ Each function accepts a DataFrame (and optional kwargs), produces a plot,
 saves it to disk, and returns the output file path.
 """
 
+import textwrap
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -766,6 +767,57 @@ def plot_length_by_qscore_tier(df, outpath, max_length=None, min_length=None, lo
     return _save(fig, outpath)
 
 
+def plot_length_by_qscore_tier_kde(df, outpath, max_length=None, min_length=None):
+    """
+    Overlapping KDE curves of pass-filter read length split into Q-score tiers,
+    always plotted on a log x-axis.  Distributional shifts between tiers are
+    much easier to see here than on the side-by-side violin plot.
+    Vertical dashed lines mark the median for each tier.
+    """
+    pf = df[df['passes_filtering'] == True].copy()
+    if pf.empty:
+        return None
+
+    pf = pf[pf['sequence_length_template'] >= 1]
+    if min_length is not None:
+        pf = pf[pf['sequence_length_template'] >= max(min_length, 1)]
+    if max_length is not None:
+        pf = pf[pf['sequence_length_template'] <= max_length]
+
+    bins   = [0, 10, 15, 20, float('inf')]
+    labels = ['Q7-10', 'Q10-15', 'Q15-20', 'Q>=20']
+    pf['q_tier'] = pd.cut(
+        pf['mean_qscore_template'], bins=bins, labels=labels, right=False
+    )
+
+    # RdYlGn colours matching the violin plot
+    palette = ['#d73027', '#fee08b', '#a6d96a', '#1a9850']
+
+    fig, ax = plt.subplots(figsize=_FIGSIZE)
+    for label, color in zip(labels, palette):
+        tier_data = pf.loc[pf['q_tier'] == label, 'sequence_length_template']
+        if tier_data.empty:
+            continue
+        sns.kdeplot(
+            tier_data,
+            ax=ax,
+            label=label,
+            color=color,
+            fill=True,
+            alpha=0.35,
+            linewidth=1.5,
+            log_scale=True,
+        )
+        median = tier_data.median()
+        ax.axvline(median, color=color, linestyle='--', linewidth=1.2, alpha=0.9)
+
+    ax.set_title('Read Length Distribution by Q-Score Tier (Pass-Filter)', fontsize=16)
+    ax.set_xlabel('Read Length (bp, log scale)', fontsize=13)
+    ax.set_ylabel('Density', fontsize=13)
+    ax.legend(title='Q-Score Tier', fontsize=11)
+    return _save(fig, outpath)
+
+
 # ---------------------------------------------------------------------------
 # Yield by flowcell region / MUX group
 # ---------------------------------------------------------------------------
@@ -816,33 +868,278 @@ def plot_yield_by_mux_group(df, outpath):
 # End-reason breakdown
 # ---------------------------------------------------------------------------
 
-def plot_end_reason(df, outpath):
+def _detect_mux_period(df, bin_s=60, min_period_s=900, max_period_s=14400):
     """
-    Horizontal bar chart of read end reasons.
+    Infer the mux scan cycle period from periodic gaps in read start times.
+
+    During a mux scan all channels pause simultaneously, creating brief windows
+    in which no new reads start.  These appear as regular vertical white stripes
+    in the sequencing-speed-over-time plot.
+
+    Algorithm
+    ---------
+    1. Bin read start times into 1-minute windows.
+    2. Identify gap bins (count < 5% of the median non-zero bin count).
+    3. Cluster consecutive gap bins into single events; record each event's
+       centre time and duration.
+    4. Discard long events (> 15 min) -- these are flush/reload pauses, not
+       mux scans.  Mux scans typically complete within 1-5 minutes.
+    5. Compute spacings between consecutive mux-scan events.
+    6. Build a histogram of spacings (5-min bins, 15-240 min range) and return
+       the modal bin centre.
+
+    Steps 5-6 use the mode so that occasional user-triggered mux changes
+    (which add minority irregular spacings) do not shift the result.
+
+    Returns (period_s, n_reloads) where period_s is the detected mux scan
+    period in seconds (or None if unreliable) and n_reloads is the count of
+    long pause events (flush/reload) detected in the run.
+    """
+    if 'start_time' not in df.columns:
+        return None, 0
+
+    times = df['start_time'].dropna().values
+    if len(times) < 500:
+        return None, 0
+
+    max_time = float(times.max())
+    if max_time < min_period_s * 2.5:
+        return None, 0  # run too short to see at least two full cycles
+
+    # 1. Bin into 1-minute windows
+    edges  = np.arange(0.0, max_time + bin_s, bin_s)
+    counts, _ = np.histogram(times, bins=edges)
+
+    # 2. Identify gap bins
+    nz = counts[counts > 0]
+    if len(nz) == 0:
+        return None, 0
+    threshold = np.median(nz) * 0.05
+    is_gap = counts < threshold
+
+    # 3. Cluster consecutive gap bins into events; record centre and duration
+    padded = np.concatenate([[False], is_gap, [False]])
+    starts = np.where(np.diff(padded.astype(int)) >  0)[0]
+    ends   = np.where(np.diff(padded.astype(int)) < 0)[0]
+    if len(starts) < 2:
+        return None, 0
+
+    # 4. Classify events by duration:
+    #      short (1-15 min) -> mux scan candidate
+    #      long  (> 15 min) -> flush/reload pause (counted separately)
+    #    Long gaps are excluded from the period calculation so they don't
+    #    corrupt the spacing list, but we count them for the footnote.
+    max_mux_gap_s = 900.0   # 15 minutes
+    min_gap_s     = bin_s   # 1 minute -- shorter gaps are noise
+
+    mux_event_times = []
+    n_reloads       = 0
+
+    for s, e in zip(starts, ends):
+        t_start  = edges[s]
+        t_end    = edges[min(e, len(edges) - 1)]
+        duration = t_end - t_start
+        if duration < min_gap_s:
+            pass                                              # noise
+        elif duration <= max_mux_gap_s:
+            mux_event_times.append((t_start + t_end) / 2.0) # mux scan
+        else:
+            n_reloads += 1                                    # flush/reload
+
+    if len(mux_event_times) < 2:
+        return None, n_reloads
+
+    # 5. Consecutive spacings between mux-scan events
+    event_times = np.array(mux_event_times)
+    spacings    = np.diff(event_times)
+    valid       = spacings[(spacings >= min_period_s) & (spacings <= max_period_s)]
+    if len(valid) < 2:
+        return None, n_reloads
+
+    # 6. Modal spacing (5-min resolution) -- robust to user-triggered mux changes
+    res        = 300.0  # 5-minute bins
+    hist_edges = np.arange(min_period_s, max_period_s + res, res)
+    hist, _    = np.histogram(valid, bins=hist_edges)
+    if hist.max() == 0:
+        return None, n_reloads
+
+    peak_idx = int(np.argmax(hist))
+    period   = (hist_edges[peak_idx] + hist_edges[peak_idx + 1]) / 2.0
+    return float(period), int(n_reloads)
+
+
+def _expected_mux_interrupt_pct(df, mux_period_s=5400):
+    """
+    Estimate the expected percentage of reads truncated by a mux scan.
+
+    Model
+    -----
+    Reads start uniformly at random within the mux scan cycle of period T.
+    A read of length L at translocation speed v occupies t = L/v seconds.
+    If t exceeds the remaining time until the next mux scan the read is cut.
+
+      P(truncated | L) = min(L / (v * T), 1)
+
+    Expected % = 100 * mean_i[ min(L_i / (v * T), 1) ]
+
+    Speed is estimated from the median of signal_positive (complete, unbiased)
+    reads.  Falls back to all reads with valid speed if too few are available.
+
+    The mux period is auto-detected from start-time gaps if possible;
+    mux_period_s is used as the fallback default.
+
+    Returns (expected_pct, median_speed_bps, used_period_s, auto_detected, n_reloads)
+    or (None, None, None, False, 0) if data are insufficient.
+    """
+    if 'sequencing_speed' not in df.columns:
+        return None, None, None, False, 0
+
+    # Auto-detect mux period and reload count from start-time gaps
+    detected_period, n_reloads = _detect_mux_period(df)
+    if detected_period is not None:
+        period   = detected_period
+        auto_det = True
+    else:
+        period   = mux_period_s
+        auto_det = False
+
+    # Prefer complete reads for an unbiased speed estimate -- truncated reads
+    # are artificially short and pull the median translocation speed down.
+    if 'end_reason' in df.columns:
+        src = df[df['end_reason'] == 'signal_positive']
+    else:
+        src = df
+    if len(src) < 50:
+        src = df  # not enough complete reads; fall back to all
+
+    speed_vals = (
+        src['sequencing_speed']
+        .replace([float('inf'), float('-inf')], float('nan'))
+        .dropna()
+    )
+    speed_vals = speed_vals[(speed_vals > 10) & (speed_vals < 5000)]  # bp/s sanity bounds
+    if speed_vals.empty:
+        return None, None, None, False, 0
+
+    median_speed = float(speed_vals.median())
+
+    lengths = df['sequence_length_template'].dropna()
+    lengths = lengths[lengths > 0]
+    if lengths.empty:
+        return None, None, None, False, 0
+
+    p_trunc = (lengths / (median_speed * period)).clip(upper=1.0)
+    return float(p_trunc.mean() * 100), median_speed, period, auto_det, int(n_reloads)
+
+
+def plot_end_reason(df, outpath, mux_period_s=5400):
+    """
+    Horizontal bar chart of read end reasons with count and percentage labels.
+
+    A footnote compares the model-predicted unblock_mux_change fraction with
+    the observed fraction.  A large excess of observed vs expected can indicate
+    pore blocking, DNA carry-over, or active adaptive sampling unblocking.
+
     Returns None silently if the end_reason column is absent (old files).
+
+    Parameters
+    ----------
+    mux_period_s : int
+        Mux scan cycle period in seconds (default 5400 = 90 min, the MinKNOW
+        default for standard runs).  For ULK runs with extended or disabled mux
+        scans, pass a larger value or 0 to suppress the footnote.
     """
     if 'end_reason' not in df.columns:
         return None
 
+    total  = len(df)
     counts = df['end_reason'].value_counts().sort_values()
-    pal = sns.color_palette('muted', len(counts))
+    pal    = sns.color_palette('muted', len(counts))
 
     fig, ax = plt.subplots(figsize=_FIGSIZE)
     bars = ax.barh(counts.index, counts.values, color=pal[::-1], alpha=0.85)
 
-    # Annotate each bar with the count
+    # Count + percentage label on each bar
     for bar, val in zip(bars, counts.values):
+        pct = val / total * 100
         ax.text(
             bar.get_width() + counts.values.max() * 0.01,
             bar.get_y() + bar.get_height() / 2,
-            f'{val:,}',
-            va='center', ha='left', fontsize=10,
+            f'{val:,}  ({pct:.1f}%)',
+            va='center', ha='left', fontsize=11,
         )
 
     ax.set_title('Read End Reason', fontsize=16)
     ax.set_xlabel('Read Count', fontsize=13)
     ax.set_ylabel('')
-    ax.margins(x=0.15)
+    # Set x-limit explicitly: just enough room for the widest bar label,
+    # avoiding the large right-side gap that ax.margins() would add.
+    ax.set_xlim(0, counts.values.max() * 1.28)
+
+    # --- Model footnote -------------------------------------------------------
+    if mux_period_s > 0:
+        exp_pct, med_speed, used_period, auto_det, n_reloads = \
+            _expected_mux_interrupt_pct(df, mux_period_s)
+        if exp_pct is not None:
+            actual_n   = int((df['end_reason'] == 'unblock_mux_change').sum())
+            actual_pct = actual_n / total * 100
+            period_min = used_period / 60.0
+            period_src = (f'auto-detected {period_min:.0f} min'
+                          if auto_det else f'assumed {period_min:.0f} min')
+            reload_note = (
+                f'  {n_reloads} library reload event(s) detected '
+                f'(not modeled -- each also terminates active reads).'
+                if n_reloads > 0 else ''
+            )
+            note_lines = [
+                f'* unblock_mux_change = reads terminated by mux scans AND/OR pore '
+                f'unblocking (hairpin clearing, adaptive sampling) -- both map to this '
+                f'label in modern MinKNOW.',
+                f'  Mux scan contribution (model): {exp_pct:.1f}%  |  '
+                f'Observed total: {actual_pct:.1f}%  |  '
+                f'Mux cycle: {period_src};  translocation speed: {med_speed:.0f} bp/s.',
+            ]
+            if reload_note:
+                note_lines.append(reload_note)
+            note_lines.append(
+                '  Excess above modeled mux contribution is expected -- '
+                'routine pore unblocking throughout the run is normal.'
+            )
+
+            # Wrap each line to the axes width.
+            # 110 chars fits comfortably at 12pt monospace in a 13-inch figure at 150 dpi.
+            _WRAP = 110
+            wrapped_lines = []
+            for ln in note_lines:
+                indent = '  ' if ln.startswith('  ') else ''
+                wrapped_lines.append(
+                    textwrap.fill(ln, width=_WRAP,
+                                  subsequent_indent=indent + '  ',
+                                  break_long_words=False,
+                                  break_on_hyphens=False)
+                )
+            note = '\n'.join(wrapped_lines)
+            n_note_lines = note.count('\n') + 1
+
+            # Grow the figure height exactly enough for the footnote so there
+            # is no dead space below the text or between text and the axes.
+            _FONT_PT  = 12
+            line_h_in = (_FONT_PT / 72) * 1.5   # leading = 1.5x font size
+            foot_h_in = n_note_lines * line_h_in + 0.05
+            new_fig_h = _FIGSIZE[1] + foot_h_in
+            fig.set_size_inches(_FIGSIZE[0], new_fig_h)
+            # tight_layout with rect auto-handles the x-axis title and tick
+            # labels so they don't overlap the footnote.
+            foot_frac = foot_h_in / new_fig_h
+            fig.tight_layout(rect=[0, foot_frac, 1, 1])
+
+            fig.text(
+                0.01, 0.01, note,
+                fontsize=_FONT_PT, color='#555555',
+                ha='left', va='bottom',
+                family='monospace',
+            )
+
     return _save(fig, outpath)
 
 

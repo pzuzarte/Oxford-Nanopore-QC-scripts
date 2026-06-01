@@ -92,7 +92,8 @@ warnings.filterwarnings(
     category=FutureWarning,
 )
 
-from qc_modules import loader, stats, seq_plots, barcode_plots, duty_plots, throughput_plots, report
+# qc_modules are imported inside main() so that --help exits immediately
+# without waiting for pandas/matplotlib/seaborn to load.
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +222,9 @@ def resolve_barcodes(df, barcodes_arg):
 def main():
     args = parse_args()
 
+    # Heavy imports deferred until after arg parsing so --help is instant.
+    from qc_modules import loader, stats, seq_plots, barcode_plots, duty_plots, throughput_plots, report
+
     # --- Resolve input files ------------------------------------------------
     summary_file = args.file or loader.find_summary_file()
     # Search for companion files in the same directory as the summary file
@@ -333,6 +337,13 @@ def main():
     if path:
         plot_registry['read_quality'].append((path, 'Read Length by Q-Score Tier'))
 
+    path = seq_plots.plot_length_by_qscore_tier_kde(
+        df, p(outdir, run_name, 'length_by_qscore_tier_kde.png'),
+        max_length=max_length, min_length=min_length,
+    )
+    if path:
+        plot_registry['read_quality'].append((path, 'Read Length by Q-Score Tier (Density)'))
+
     path = seq_plots.plot_end_reason(df, p(outdir, run_name, 'end_reason.png'))
     if path:
         plot_registry['read_quality'].append((path, 'Read End Reason'))
@@ -417,6 +428,11 @@ def main():
             pore_file, p(outdir, run_name, 'occupancy_over_time.png')
         )
         plot_registry['duty_time'].append((path, 'Pore Occupancy over Time'))
+
+        path = duty_plots.plot_blocked_vs_active(
+            pore_file, p(outdir, run_name, 'blocked_vs_active.png')
+        )
+        plot_registry['duty_time'].append((path, 'Pore State: Blocked vs Active'))
 
         plotly_html = duty_plots.plot_duty_time_plotly(pore_file)
         if plotly_html:

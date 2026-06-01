@@ -164,6 +164,88 @@ def plot_occupancy_over_time(filepath, outpath, sample_every=10):
     return outpath
 
 
+def plot_blocked_vs_active(filepath, outpath, sample_every=10):
+    """
+    Stacked area chart of simplified pore state categories over run time.
+
+    Collapses the ~15 MinKNOW channel states into 4 interpretable groups:
+
+      Sequencing   -- strand (DNA actively translocating)
+      Ready        -- pore, adapter, unblocking  (available, about to sequence)
+      Blocked      -- locked, multiple, saturated, pending_manual_reset,
+                      unknown_negative  (pore stuck or occupied unproductively)
+      Unavailable  -- everything else (no_pore, zero, unclassified,
+                      pending_mux_change, disabled, ...)
+
+    Y-axis shows each category as a percentage of all channels, making it
+    immediately visible whether blocked pores accumulate over the run, spike
+    after library reloads, or recover following mux scans.
+    """
+    df = pd.read_csv(filepath)
+
+    wide = pd.pivot_table(
+        df,
+        values='State Time (samples)',
+        index='Experiment Time (minutes)',
+        columns='Channel State',
+        aggfunc='sum',
+        fill_value=0,
+    ).reset_index().sort_values('Experiment Time (minutes)')
+
+    wide = wide.iloc[::sample_every, :].copy()
+
+    SEQUENCING = ['strand']
+    READY      = ['pore', 'adapter', 'unblocking', 'above']
+    BLOCKED    = ['locked', 'multiple', 'saturated',
+                  'pending_manual_reset', 'unknown_negative']
+
+    all_data_states = [c for c in wide.columns if c != 'Experiment Time (minutes)']
+    UNAVAILABLE = [s for s in all_data_states
+                   if s not in SEQUENCING + READY + BLOCKED]
+
+    def _sum(states):
+        cols = [s for s in states if s in wide.columns]
+        return sum(wide[c] for c in cols) if cols else pd.Series(0, index=wide.index)
+
+    seq     = _sum(SEQUENCING)
+    ready   = _sum(READY)
+    blocked = _sum(BLOCKED)
+    unavail = _sum(UNAVAILABLE)
+
+    total = (seq + ready + blocked + unavail).replace(0, float('nan'))
+
+    time_hr = wide['Experiment Time (minutes)'] / 60
+
+    categories = [
+        (seq     / total * 100, 'Sequencing',        '#2196F3'),  # blue
+        (ready   / total * 100, 'Ready / available', '#4CAF50'),  # green
+        (blocked / total * 100, 'Blocked / stuck',   '#F44336'),  # red
+        (unavail / total * 100, 'Unavailable',        '#9E9E9E'),  # grey
+    ]
+
+    fig, ax = plt.subplots(figsize=(16, 5))
+
+    ax.stackplot(
+        time_hr,
+        [pct.fillna(0) for pct, _, _ in categories],
+        labels=[lbl for _, lbl, _ in categories],
+        colors=[col for _, _, col in categories],
+        alpha=0.85,
+    )
+
+    ax.set_ylim(0, 100)
+    ax.set_xlim(left=0)
+    ax.set_title('Pore State: Blocked vs Active over Time', fontsize=16)
+    ax.set_xlabel('Run Time (hr)', fontsize=13)
+    ax.set_ylabel('% of Channels', fontsize=13)
+    ax.legend(loc='upper right', fontsize=11, frameon=True)
+
+    fig.tight_layout()
+    fig.savefig(outpath, bbox_inches='tight', dpi=150)
+    plt.close(fig)
+    return outpath
+
+
 def plot_duty_time_plotly(filepath, sample_every=10):
     """
     Interactive Plotly stacked bar chart of pore channel states over time.
