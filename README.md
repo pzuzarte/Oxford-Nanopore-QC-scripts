@@ -57,16 +57,24 @@ python ont_qc.py --file sequencing_summary.txt \
                  --poreActivity pore_activity.csv \
                  --throughput throughput_data.csv \
                  --runName MyRun
-
-# Custom output directory and read-length axis cap
-python ont_qc.py --runName MyRun --outdir /results/qc --maxLength 50000
-
-# Subsample to 50% of reads (useful for very large files)
-python ont_qc.py --file sequencing_summary.txt --runName MyRun --subsample 0.5
-
-# Generate an animated channel strand-time video (requires ffmpeg)
-python ont_qc.py --runName MyRun --video
 ```
+
+**All flags:**
+
+| Flag | Default | Description |
+|---|---|---|
+| `--file` | auto-detect | Path to `sequencing_summary*.txt` |
+| `--runName` | `""` | Prefix for all output filenames and the HTML report title |
+| `--outdir` | `<runName>_qc/` | Output directory |
+| `--poreActivity` | auto-detect | Path to `pore_activity*.csv` |
+| `--throughput` | auto-detect | Path to `throughput_*.csv` |
+| `--subsample` | `1.0` | Fraction of reads to load (e.g. `0.5` for 50%) — useful for very large files |
+| `--maxLength` | mean + 3×SD | Upper x-axis cap (bp) on all read-length plots |
+| `--minLength` | none | Lower x-axis bound (bp) on all read-length plots |
+| `--logLength` | off | Use a log-scale x-axis on all read-length plots |
+| `--prop` | `2000` | Read length threshold (bp) for the proportion-above-cutoff metric |
+| `--barcodes` | all | Restrict barcode plots: pass an integer for top N (e.g. `--barcodes 12`) or specific barcode names (e.g. `--barcodes barcode01 barcode02`) |
+| `--video` | off | Generate an animated MP4 of per-channel strand activity (requires `ffmpeg`) |
 
 **Input files** (all auto-detected if in the same directory as the summary file):
 
