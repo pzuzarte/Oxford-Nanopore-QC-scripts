@@ -555,6 +555,36 @@ def _build_plots(styles):
     ))
 
     story.append(_plot_block(
+        title='Read Length Distribution — Pass vs. Fail (KDE)',
+        data_source='sequencing_summary*.txt',
+        description=(
+            'Overlapping kernel density estimate (KDE) curves of read lengths, '
+            'with pass-filter reads in blue and fail reads in red. Both '
+            'distributions are plotted on the same axes so that the length '
+            'profiles of passing and failing reads can be compared directly. '
+            'The x-axis is capped at mean + 3 SD of the pass-filter reads. '
+            'A log x-axis is used when --logLength is set.'
+        ),
+        look_for=[
+            'Whether fail reads are systematically shorter than pass reads.',
+            'Whether the two distributions overlap substantially or are well separated.',
+            'A sharp fail peak at very short lengths (adapter dimers or short fragments).',
+        ],
+        interpret=[
+            'Fail reads that are shorter on average than pass reads is expected: '
+            'short fragments produce noisier signal that is more likely to fall '
+            'below the Q-score threshold.',
+            'Near-identical pass and fail length distributions suggest that '
+            'quality is not length-dependent — the fail reads may reflect '
+            'pore noise or signal artefacts rather than short DNA.',
+            'A bimodal fail distribution (short peak + longer tail) may indicate '
+            'two populations: adapter dimers and genuine reads that are just '
+            'below the quality threshold.',
+        ],
+        styles=styles,
+    ))
+
+    story.append(_plot_block(
         title='Read Length CDF (Base-Weighted)',
         data_source='sequencing_summary*.txt',
         description=(
@@ -696,6 +726,38 @@ def _build_plots(styles):
             'has excellent short-read basecalling but long reads are noisier.',
             'An empty or near-empty Q≥20 tier is expected for R9.4.1 data; '
             'for R10.4 Kit14 data this tier should be well populated.',
+        ],
+        styles=styles,
+    ))
+
+    story.append(_plot_block(
+        title='Read Length Distribution by Q-Score Tier (KDE)',
+        data_source='sequencing_summary*.txt',
+        description=(
+            'Overlapping, filled KDE curves — one per Q-score tier — of '
+            'pass-filter read lengths plotted on a log x-axis. Tiers are '
+            'Q7–10 (red), Q10–15 (yellow), Q15–20 (light green), Q≥20 (dark green), '
+            'matching the colours of the violin plot. Vertical dashed lines '
+            'mark the median length for each tier. Unlike the violin plot, '
+            'this view shows distributional overlap between tiers directly '
+            'and handles extreme outliers more gracefully on the log scale.'
+        ),
+        look_for=[
+            'Whether the KDE peaks for each tier align or are shifted relative '
+            'to each other.',
+            'The spread of each curve — narrow peaks indicate a consistent '
+            'length profile within that quality tier.',
+            'Tiers with very flat or absent curves (few reads in that quality band).',
+        ],
+        interpret=[
+            'Peaks that are well aligned across tiers indicate read length and '
+            'quality are independent for this library.',
+            'A leftward shift of the low-Q (red) tier indicates that shorter '
+            'reads are more likely to fail — common with adapter carry-over '
+            'or fragmented DNA.',
+            'A rightward shift of the high-Q (green) tier indicates that '
+            'longer reads basecall better — expected for libraries with '
+            'good high-molecular-weight DNA.',
         ],
         styles=styles,
     ))
@@ -1097,6 +1159,48 @@ def _build_plots(styles):
         optional=True,
     ))
 
+    story.append(_plot_block(
+        title='Blocked vs. Active Channels over Time',
+        data_source='pore_activity*.csv',
+        description=(
+            'A stacked area chart that collapses the ~15 raw MinKNOW channel '
+            'states into four interpretable groups, expressed as a percentage '
+            'of all channels: '
+            'Sequencing (strand — DNA actively translocating), '
+            'Ready (pore, adapter, unblocking — available and about to sequence), '
+            'Blocked (locked, saturated, multiple, pending_manual_reset — '
+            'stuck or occupied unproductively), and '
+            'Unavailable (no_pore, zero, disabled, and all remaining states). '
+            'This simplified view makes it immediately apparent whether '
+            'blocked pores are accumulating, whether available pores are being '
+            'used productively, and how the ratio shifts across the run.'
+        ),
+        look_for=[
+            'The combined height of Sequencing + Ready (blue + green) at T=0 '
+            '-- this is the effective active-channel fraction at run start.',
+            'Whether the Blocked (orange) band grows over time.',
+            'Whether the Unavailable (grey) band grows steadily (normal pore '
+            'depletion) or in sudden steps (MUX scan events).',
+            'Any recovery in the Sequencing band after a MUX scan.',
+        ],
+        interpret=[
+            'A tall Sequencing + Ready band at T=0 (>60% of channels) indicates '
+            'a well-loaded flowcell with good initial pore availability.',
+            'Gradual growth of the Unavailable band throughout the run is normal '
+            'and reflects irreversible pore loss as the flowcell ages.',
+            'Growth of the Blocked band over time suggests progressive pore '
+            'fouling -- common when the library contains free adapters, '
+            'protein carry-over, or inhibitors from the sample preparation.',
+            'Periodic spikes where Sequencing drops and Unavailable rises '
+            'briefly are MUX scan fingerprints -- expected and healthy.',
+            'A Blocked band that rises steeply in the first few hours on a '
+            'fresh flowcell strongly suggests a library quality issue rather '
+            'than flowcell degradation.',
+        ],
+        styles=styles,
+        optional=True,
+    ))
+
     # ================================================================
     # SECTION 7 — SUMMARY TABLE
     # ================================================================
@@ -1248,12 +1352,14 @@ def _build_toc(styles):
         ]),
         ('3  Read Quality', [
             'Read Length Distribution',
+            'Read Length Distribution — Pass vs. Fail (KDE)',
             'Read Length CDF (Base-Weighted)',
             'Proportion of Bases by Read Length',
             'Q-Score Distribution (Pass vs. Fail)',
             'Q-Score Tiers over Time',
             'Read Length vs. Q-Score (Hex Joint Plot)',
             'Read Length Distribution by Q-Score Tier (Violin)',
+            'Read Length Distribution by Q-Score Tier (KDE)',
             'Read End Reason',
             'Read Length vs. Run Time (Hexbin)',
             'Sequencing Speed over Time',
@@ -1274,6 +1380,7 @@ def _build_toc(styles):
         ('6  Pore Activity / Duty Time  [requires pore_activity*.csv]', [
             'Pore Activity / Duty Time (Interactive)',
             'Pore Occupancy over Time',
+            'Blocked vs. Active Channels over Time  [optional]',
         ]),
         ('7  Top 10 Longest Pass-Filter Reads', [
             'Top 10 Longest Pass-Filter Reads Table',
