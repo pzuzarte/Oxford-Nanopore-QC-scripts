@@ -1,0 +1,9 @@
+# Core dependencies (required by ont_qc.py and qc_modules)
+matplotlib>=3.8
+numpy>=1.26
+pandas>=2.2
+seaborn>=0.13
+plotly>=5.22
+
+# Required only by plot_guide.py (generates ONT_QC_Plot_Guide.pdf)
+reportlab>=4.0
